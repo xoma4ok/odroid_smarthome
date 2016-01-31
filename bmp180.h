@@ -6,7 +6,7 @@
 #define BMP180_HIGHRES		2
 #define BMP180_ULTRAHIGHRES	3
 
-#define BMP180_CAL_AC1		0xAA 
+#define BMP180_CAL_AC1		0xAA
 #define BMP180_CAL_AC2		0xAC
 #define BMP180_CAL_AC3		0xAE
 #define BMP180_CAL_AC4		0xB0
