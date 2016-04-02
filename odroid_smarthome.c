@@ -28,25 +28,42 @@ int main(int argc, char **argv)
    */
   const char* l_device;
   l_device = "/dev/i2c-1";
-  int l_timer = 60000000; //Как часто опрашиваем датчики и бегаем по циклу. По дефолту 60 секунд
+  int g_timer; //Как часто опрашиваем датчики и бегаем по циклу. По дефолту 60 секунд =60000000
   int l_count_current = 1; //Текущий счетчик
   int l_count_for_commit_to_base = 1; //На какой итерации мы коммитим в базу. 1=каждый раз
   int l_count_for_send_narodmon = 5; //На какой итерации мы сливаем на сайт. 5=Каждый 5ый раз, по дефолту раз в 5 минут
   string l_send_string_mac_prefix;
   string l_send_string_address;
-  l_send_string_mac_prefix = ("001e06200b48");
-  l_send_string_address = ("http://narodmon.ru/post");
   string l_send_payload;
   ostringstream l_buffer_for_double;
-  connection C(
+  connection C_postgres(
     "dbname=smarthome user=postgres password=odroid \
       hostaddr=127.0.0.1 port=5432");
   /* Create prepared SQL statement */
-  C.prepare("insert_item",
-            "INSERT INTO sensor_items (sensor_id,value_number) VALUES ($1, $2 )");
+  C_postgres.prepare("insert_sensor_item",
+                     "INSERT INTO sensor_items (sensor_id,value_number) VALUES ($1, $2 )");
+  C_postgres.prepare("select_config_param_char",
+                     "SELECT t.attr_char FROM smarthome_config t where upper(t.attr_name) = upper($1) ");
+  C_postgres.prepare("select_config_param_num",
+                     "SELECT t.attr_num FROM smarthome_config t where upper(t.attr_name) = upper($1) ");
+  /* Create a transactional object. */
+  work W_postgres_config(C_postgres);
+  result R_postgres;
   /*
    [::]
+   Заполняем кофигурацию из базы
+   ====================
    */
+  R_postgres = W_postgres_config.prepared("select_config_param_num")("g_timer_sec").exec();
+  g_timer = R_postgres[0][0].as<int>() * 1000000;
+  R_postgres = W_postgres_config.prepared("select_config_param_char")("narodmon_mac").exec();
+  l_send_string_mac_prefix = R_postgres[0][0].c_str();
+  R_postgres = W_postgres_config.prepared("select_config_param_char")("narodmon_post_address").exec();
+  l_send_string_address = R_postgres[0][0].c_str();
+  W_postgres_config.commit();
+  /*
+  ====================
+  */
   if(argc == 2)
     {
       l_device = argv[1];
@@ -57,9 +74,9 @@ int main(int argc, char **argv)
       printf("sudo ./weather_board [i2c node](default \"/dev/i2c-1\")\n");
       return -1;
     }
-  if(C.is_open())
+  if(C_postgres.is_open())
     {
-      cout << "Opened database successfully: " << C.dbname() << endl;
+      cout << "Opened database successfully: " << C_postgres.dbname() << endl;
     }
   else
     {
@@ -92,17 +109,17 @@ int main(int argc, char **argv)
           try
             {
               /* Create a transactional object. */
-              work W(C);
+              work W_postgres(C_postgres);
               /* Execute prepared SQL query */
-              W.prepared("insert_item")(1)(temperature / 100.0).exec(); //bme280 temp
-              W.prepared("insert_item")(2)(humidity / 1024.0).exec(); //bme280 hum
-              //уберем неправославные единицы W.prepared("insert_item")(3)(pressure_hpa / 100.0).exec(); //bme280 pressure_hpa
-              //уберем лишнее W.prepared("insert_item")(4)(bme280_readAltitude(pressure_hpa, SEALEVELPRESSURE_HPA)).exec(); //bme280 altitude
-              W.prepared("insert_item")(5)(Si1132_readUV() / 100.0).exec(); //si1132 uv index
-              W.prepared("insert_item")(6)(Si1132_readVisible()).exec(); //si1132 visible
-              W.prepared("insert_item")(7)(Si1132_readIR()).exec(); //si1132 IR
-              W.prepared("insert_item")(8)(pressure_mmhg).exec(); //bme280 pressure_mmhg
-              W.commit();
+              W_postgres.prepared("insert_sensor_item")(1)(temperature / 100.0).exec(); //bme280 temp
+              W_postgres.prepared("insert_sensor_item")(2)(humidity / 1024.0).exec(); //bme280 hum
+              //уберем неправославные единицы W.prepared("insert_sensor_item")(3)(pressure_hpa / 100.0).exec(); //bme280 pressure_hpa
+              //уберем лишнее W.prepared("insert_sensor_item")(4)(bme280_readAltitude(pressure_hpa, SEALEVELPRESSURE_HPA)).exec(); //bme280 altitude
+              W_postgres.prepared("insert_sensor_item")(5)(Si1132_readUV() / 100.0).exec(); //si1132 uv index
+              W_postgres.prepared("insert_sensor_item")(6)(Si1132_readVisible()).exec(); //si1132 visible
+              W_postgres.prepared("insert_sensor_item")(7)(Si1132_readIR()).exec(); //si1132 IR
+              W_postgres.prepared("insert_sensor_item")(8)(pressure_mmhg).exec(); //bme280 pressure_mmhg
+              W_postgres.commit();
               cout << "Records inserted successfully" << endl;
             }
           catch(const std::exception &e)
@@ -167,12 +184,12 @@ int main(int argc, char **argv)
               return 1;
             }
         }
-      usleep(l_timer);
+      usleep(g_timer);
       if(l_count_current == 2000000000)
         {
           l_count_current = 0;
         }
     }
-  C.disconnect();
+  C_postgres.disconnect();
   return 0;
 }
