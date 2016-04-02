@@ -33,7 +33,7 @@ void prepare_sql(pqxx::connection_base &p_connection)
   Подготавливаем типовые запросы
   */
   p_connection.prepare("insert_sensor_item",
-                       "INSERT INTO sensor_items (sensor_id,value_number) VALUES ($1, $2 )");
+                       "INSERT INTO sensor_items (record_type,sensor_id,value_number) VALUES (1, $1, $2 )");
   p_connection.prepare("select_config_param_char",
                        "SELECT t.attr_char FROM smarthome_config t where upper(t.attr_name) = upper($1) ");
   p_connection.prepare("select_config_param_num",
