@@ -18,7 +18,113 @@ static s32 temperature;
 static u32 humidity;
 static float altitude;
 
-float SEALEVELPRESSURE_HPA = 1024.25;
+float SEALEVELPRESSURE_HPA;
+
+int g_timer; //Как часто опрашиваем датчики и бегаем по циклу. По дефолту 60 секунд =60000000
+int g_count_for_commit_to_base ; //На какой итерации мы коммитим в базу. 1=каждый раз = 1
+int g_count_for_cleanup_db ; //На какой итерации мы чистим базу
+int g_count_for_send_narodmon; //На какой итерации мы сливаем на сайт. 5=Каждый 5ый раз, по дефолту раз в 5 минут = 5
+string l_send_string_mac_prefix;
+string l_send_string_address;
+
+void prepare_sql(pqxx::connection_base &p_connection)
+{
+  /*
+  Подготавливаем типовые запросы
+  */
+  p_connection.prepare("insert_sensor_item",
+                       "INSERT INTO sensor_items (sensor_id,value_number) VALUES ($1, $2 )");
+  p_connection.prepare("select_config_param_char",
+                       "SELECT t.attr_char FROM smarthome_config t where upper(t.attr_name) = upper($1) ");
+  p_connection.prepare("select_config_param_num",
+                       "SELECT t.attr_num FROM smarthome_config t where upper(t.attr_name) = upper($1) ");
+  p_connection.prepare("cleanup_base", "SELECT * FROM P_CLEANUP()");
+}
+
+void load_config_from_db(pqxx::connection_base &p_connection)
+{
+  /*
+  Грузим конфиг и константы из БД
+  */
+  work W_postgres(p_connection);
+  result R_postgres;
+  //=====================================================================================
+  //Блок общих параметров
+  try
+    {
+      R_postgres = W_postgres.prepared("select_config_param_num")("g_timer_sec").exec();
+      g_timer = R_postgres[0][0].as<int>() * 1000000;
+    }
+  catch(const std::exception &e)
+    {
+      cout << "Error at selecting configure parameter = g_timer_sec" << endl;
+      cerr << e.what() << endl;
+    }
+  try
+    {
+      R_postgres = W_postgres.prepared("select_config_param_num")("g_local_commit_tic").exec();
+      g_count_for_commit_to_base = R_postgres[0][0].as<int>();
+    }
+  catch(const std::exception &e)
+    {
+      cout << "Error at selecting configure parameter = g_local_commit_tic" << endl;
+      cerr << e.what() << endl;
+    }
+  try
+    {
+      R_postgres = W_postgres.prepared("select_config_param_num")("g_cleanup_tic").exec();
+      g_count_for_cleanup_db = R_postgres[0][0].as<int>();
+    }
+  catch(const std::exception &e)
+    {
+      cout << "Error at selecting configure parameter = g_count_for_cleanup_db" << endl;
+      cerr << e.what() << endl;
+    }
+  try
+    {
+      R_postgres = W_postgres.prepared("select_config_param_num")("g_SEALEVELPRESSURE_HPA").exec();
+      SEALEVELPRESSURE_HPA = R_postgres[0][0].as<float>();
+    }
+  catch(const std::exception &e)
+    {
+      cout << "Error at selecting configure parameter = g_SEALEVELPRESSURE_HPA" << endl;
+      cerr << e.what() << endl;
+    }
+  //=====================================================================================
+  //Теперь блок для narodmon
+  try
+    {
+      R_postgres = W_postgres.prepared("select_config_param_char")("narodmon_mac").exec();
+      l_send_string_mac_prefix = R_postgres[0][0].c_str();
+    }
+  catch(const std::exception &e)
+    {
+      cout << "Error at selecting configure parameter = narodmon_mac" << endl;
+      cerr << e.what() << endl;
+    }
+  try
+    {
+      R_postgres = W_postgres.prepared("select_config_param_char")("narodmon_post_address").exec();
+      l_send_string_address = R_postgres[0][0].c_str();
+    }
+  catch(const std::exception &e)
+    {
+      cout << "Error at selecting configure parameter = narodmon_post_address" << endl;
+      cerr << e.what() << endl;
+    }
+  try
+    {
+      R_postgres = W_postgres.prepared("select_config_param_num")("narodmon_tic_num").exec();
+      g_count_for_send_narodmon = R_postgres[0][0].as<int>();
+    }
+  catch(const std::exception &e)
+    {
+      cout << "Error at selecting configure parameter = narodmon_tic_num" << endl;
+      cerr << e.what() << endl;
+    }
+  //убиваем транзакционный объект
+  W_postgres.commit();
+}
 
 int main(int argc, char **argv)
 {
@@ -28,42 +134,16 @@ int main(int argc, char **argv)
    */
   const char* l_device;
   l_device = "/dev/i2c-1";
-  int g_timer; //Как часто опрашиваем датчики и бегаем по циклу. По дефолту 60 секунд =60000000
   int l_count_current = 1; //Текущий счетчик
-  int l_count_for_commit_to_base = 1; //На какой итерации мы коммитим в базу. 1=каждый раз
-  int l_count_for_send_narodmon = 5; //На какой итерации мы сливаем на сайт. 5=Каждый 5ый раз, по дефолту раз в 5 минут
-  string l_send_string_mac_prefix;
-  string l_send_string_address;
   string l_send_payload;
   ostringstream l_buffer_for_double;
   connection C_postgres(
-    "dbname=smarthome user=postgres password=odroid \
-      hostaddr=127.0.0.1 port=5432");
-  /* Create prepared SQL statement */
-  C_postgres.prepare("insert_sensor_item",
-                     "INSERT INTO sensor_items (sensor_id,value_number) VALUES ($1, $2 )");
-  C_postgres.prepare("select_config_param_char",
-                     "SELECT t.attr_char FROM smarthome_config t where upper(t.attr_name) = upper($1) ");
-  C_postgres.prepare("select_config_param_num",
-                     "SELECT t.attr_num FROM smarthome_config t where upper(t.attr_name) = upper($1) ");
-  /* Create a transactional object. */
-  work W_postgres_config(C_postgres);
-  result R_postgres;
-  /*
-   [::]
-   Заполняем кофигурацию из базы
-   ====================
-   */
-  R_postgres = W_postgres_config.prepared("select_config_param_num")("g_timer_sec").exec();
-  g_timer = R_postgres[0][0].as<int>() * 1000000;
-  R_postgres = W_postgres_config.prepared("select_config_param_char")("narodmon_mac").exec();
-  l_send_string_mac_prefix = R_postgres[0][0].c_str();
-  R_postgres = W_postgres_config.prepared("select_config_param_char")("narodmon_post_address").exec();
-  l_send_string_address = R_postgres[0][0].c_str();
-  W_postgres_config.commit();
-  /*
-  ====================
-  */
+    "dbname=smarthome user=postgres password=odroid hostaddr=127.0.0.1 port=5432");
+//Подготавливаем типовые запросы
+  prepare_sql(C_postgres);
+//Грузим конфиг и константы из БД
+  load_config_from_db(C_postgres);
+///
   if(argc == 2)
     {
       l_device = argv[1];
@@ -103,7 +183,7 @@ int main(int argc, char **argv)
       printf("altitude : %f m\n",
              bme280_readAltitude(pressure_hpa, SEALEVELPRESSURE_HPA));
       //Коммит в локальную базу
-      if(l_count_current % l_count_for_commit_to_base == 0)
+      if(l_count_current % g_count_for_commit_to_base == 0)
         {
           /* Инсертим в базу*/
           try
@@ -113,8 +193,6 @@ int main(int argc, char **argv)
               /* Execute prepared SQL query */
               W_postgres.prepared("insert_sensor_item")(1)(temperature / 100.0).exec(); //bme280 temp
               W_postgres.prepared("insert_sensor_item")(2)(humidity / 1024.0).exec(); //bme280 hum
-              //уберем неправославные единицы W.prepared("insert_sensor_item")(3)(pressure_hpa / 100.0).exec(); //bme280 pressure_hpa
-              //уберем лишнее W.prepared("insert_sensor_item")(4)(bme280_readAltitude(pressure_hpa, SEALEVELPRESSURE_HPA)).exec(); //bme280 altitude
               W_postgres.prepared("insert_sensor_item")(5)(Si1132_readUV() / 100.0).exec(); //si1132 uv index
               W_postgres.prepared("insert_sensor_item")(6)(Si1132_readVisible()).exec(); //si1132 visible
               W_postgres.prepared("insert_sensor_item")(7)(Si1132_readIR()).exec(); //si1132 IR
@@ -130,7 +208,7 @@ int main(int argc, char **argv)
             }
         }
       //Отправляем значения в сервис Narodmon.ru
-      if(l_count_current % l_count_for_send_narodmon == 0)
+      if(l_count_current % g_count_for_send_narodmon == 0)
         {
           try
             {
@@ -180,6 +258,26 @@ int main(int argc, char **argv)
           catch(const std::exception &e)
             {
               cout << "Error at HTTP POST" << endl;
+              cerr << e.what() << endl;
+              return 1;
+            }
+        }
+      if(l_count_current % g_count_for_cleanup_db == 0)
+        {
+          /* Чистим базу от старых данных*/
+          try
+            {
+              /* Create a transactional object. */
+              work W_postgres(C_postgres);
+              cout << "Start DB cleanup" << endl;
+              /* Execute prepared SQL query */
+              W_postgres.prepared("cleanup_base").exec();
+              W_postgres.commit();
+              cout << "DB cleanup complete" << endl;
+            }
+          catch(const std::exception &e)
+            {
+              cout << "Error at DB cleanup" << endl;
               cerr << e.what() << endl;
               return 1;
             }
