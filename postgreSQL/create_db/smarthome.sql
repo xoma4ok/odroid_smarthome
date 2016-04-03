@@ -4,7 +4,7 @@
 
 -- Dumped from database version 9.3.11
 -- Dumped by pg_dump version 9.3.0
--- Started on 2016-04-02 22:08:03
+-- Started on 2016-04-03 11:50:49
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -14,7 +14,7 @@ SET check_function_bodies = false;
 SET client_min_messages = warning;
 
 --
--- TOC entry 2004 (class 1262 OID 17028)
+-- TOC entry 2006 (class 1262 OID 17028)
 -- Name: smarthome; Type: DATABASE; Schema: -; Owner: postgres
 --
 
@@ -33,6 +33,15 @@ SET check_function_bodies = false;
 SET client_min_messages = warning;
 
 --
+-- TOC entry 2007 (class 1262 OID 17028)
+-- Dependencies: 2006
+-- Name: smarthome; Type: COMMENT; Schema: -; Owner: postgres
+--
+
+COMMENT ON DATABASE smarthome IS 'База для утилиты odroid_smarthome';
+
+
+--
 -- TOC entry 179 (class 3079 OID 11788)
 -- Name: plpgsql; Type: EXTENSION; Schema: -; Owner: 
 --
@@ -41,7 +50,7 @@ CREATE EXTENSION IF NOT EXISTS plpgsql WITH SCHEMA pg_catalog;
 
 
 --
--- TOC entry 2007 (class 0 OID 0)
+-- TOC entry 2010 (class 0 OID 0)
 -- Dependencies: 179
 -- Name: EXTENSION plpgsql; Type: COMMENT; Schema: -; Owner: 
 --
@@ -52,11 +61,34 @@ COMMENT ON EXTENSION plpgsql IS 'PL/pgSQL procedural language';
 SET search_path = public, pg_catalog;
 
 --
--- TOC entry 192 (class 1255 OID 34496)
--- Name: P_CLEANUP(); Type: FUNCTION; Schema: public; Owner: postgres
+-- TOC entry 192 (class 1255 OID 34928)
+-- Name: f_get_ds18_sensor_id(character varying); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
-CREATE FUNCTION "P_CLEANUP"() RETURNS void
+CREATE FUNCTION f_get_ds18_sensor_id(p_ds18_serial character varying) RETURNS numeric
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  l_sensor_id numeric;
+BEGIN
+  select sh.sensor_id into strict l_sensor_id from sensor_header sh where upper(sh.ds18_name)=upper(p_ds18_serial::varchar);
+  return l_sensor_id;
+EXCEPTION
+WHEN NO_DATA_FOUND THEN
+  insert into sensor_header (sensor_id,ds18_name) values(default,p_ds18_serial::varchar) returning sensor_id into l_sensor_id;
+  return  l_sensor_id;
+END;
+$$;
+
+
+ALTER FUNCTION public.f_get_ds18_sensor_id(p_ds18_serial character varying) OWNER TO postgres;
+
+--
+-- TOC entry 193 (class 1255 OID 34496)
+-- Name: p_cleanup(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION p_cleanup() RETURNS void
     LANGUAGE plpgsql
     AS $$
 declare
@@ -132,7 +164,7 @@ END;
 $$;
 
 
-ALTER FUNCTION public."P_CLEANUP"() OWNER TO postgres;
+ALTER FUNCTION public.p_cleanup() OWNER TO postgres;
 
 SET default_tablespace = '';
 
@@ -144,15 +176,16 @@ SET default_with_oids = false;
 --
 
 CREATE TABLE sensor_header (
-    sensor_id integer NOT NULL,
-    name character varying
+    sensor_id integer DEFAULT nextval(('public.sensor_header_sensor_id_seq'::text)::regclass) NOT NULL,
+    name character varying,
+    ds18_name character varying(16)
 );
 
 
 ALTER TABLE public.sensor_header OWNER TO postgres;
 
 --
--- TOC entry 2008 (class 0 OID 0)
+-- TOC entry 2013 (class 0 OID 0)
 -- Dependencies: 174
 -- Name: TABLE sensor_header; Type: COMMENT; Schema: public; Owner: postgres
 --
@@ -161,7 +194,7 @@ COMMENT ON TABLE sensor_header IS 'Шапка для сенсоров';
 
 
 --
--- TOC entry 2009 (class 0 OID 0)
+-- TOC entry 2014 (class 0 OID 0)
 -- Dependencies: 174
 -- Name: COLUMN sensor_header.sensor_id; Type: COMMENT; Schema: public; Owner: postgres
 --
@@ -170,7 +203,7 @@ COMMENT ON COLUMN sensor_header.sensor_id IS 'PK сенсора';
 
 
 --
--- TOC entry 2010 (class 0 OID 0)
+-- TOC entry 2015 (class 0 OID 0)
 -- Dependencies: 174
 -- Name: COLUMN sensor_header.name; Type: COMMENT; Schema: public; Owner: postgres
 --
@@ -179,7 +212,31 @@ COMMENT ON COLUMN sensor_header.name IS 'Имя сенсора для narodmon';
 
 
 --
--- TOC entry 178 (class 1259 OID 34529)
+-- TOC entry 2016 (class 0 OID 0)
+-- Dependencies: 174
+-- Name: COLUMN sensor_header.ds18_name; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN sensor_header.ds18_name IS 'Серийный номер сенсора DS18B20';
+
+
+--
+-- TOC entry 178 (class 1259 OID 34897)
+-- Name: sensor_header_sensor_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE sensor_header_sensor_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    MAXVALUE 2147483647
+    CACHE 1;
+
+
+ALTER TABLE public.sensor_header_sensor_id_seq OWNER TO postgres;
+
+--
+-- TOC entry 177 (class 1259 OID 34529)
 -- Name: sensor_items; Type: TABLE; Schema: public; Owner: postgres; Tablespace: 
 --
 
@@ -194,8 +251,8 @@ CREATE TABLE sensor_items (
 ALTER TABLE public.sensor_items OWNER TO postgres;
 
 --
--- TOC entry 2011 (class 0 OID 0)
--- Dependencies: 178
+-- TOC entry 2017 (class 0 OID 0)
+-- Dependencies: 177
 -- Name: TABLE sensor_items; Type: COMMENT; Schema: public; Owner: postgres
 --
 
@@ -203,8 +260,8 @@ COMMENT ON TABLE sensor_items IS 'Строки датчиков';
 
 
 --
--- TOC entry 2012 (class 0 OID 0)
--- Dependencies: 178
+-- TOC entry 2018 (class 0 OID 0)
+-- Dependencies: 177
 -- Name: COLUMN sensor_items.sensor_id; Type: COMMENT; Schema: public; Owner: postgres
 --
 
@@ -212,8 +269,8 @@ COMMENT ON COLUMN sensor_items.sensor_id IS 'FK';
 
 
 --
--- TOC entry 2013 (class 0 OID 0)
--- Dependencies: 178
+-- TOC entry 2019 (class 0 OID 0)
+-- Dependencies: 177
 -- Name: COLUMN sensor_items.record_type; Type: COMMENT; Schema: public; Owner: postgres
 --
 
@@ -223,8 +280,8 @@ COMMENT ON COLUMN sensor_items.record_type IS 'Тип записи.
 
 
 --
--- TOC entry 2014 (class 0 OID 0)
--- Dependencies: 178
+-- TOC entry 2020 (class 0 OID 0)
+-- Dependencies: 177
 -- Name: COLUMN sensor_items.sysd; Type: COMMENT; Schema: public; Owner: postgres
 --
 
@@ -232,8 +289,8 @@ COMMENT ON COLUMN sensor_items.sysd IS 'Дата измерения';
 
 
 --
--- TOC entry 2015 (class 0 OID 0)
--- Dependencies: 178
+-- TOC entry 2021 (class 0 OID 0)
+-- Dependencies: 177
 -- Name: COLUMN sensor_items.value_number; Type: COMMENT; Schema: public; Owner: postgres
 --
 
@@ -255,7 +312,7 @@ CREATE TABLE sensor_items_temp (
 ALTER TABLE public.sensor_items_temp OWNER TO postgres;
 
 --
--- TOC entry 2016 (class 0 OID 0)
+-- TOC entry 2022 (class 0 OID 0)
 -- Dependencies: 176
 -- Name: TABLE sensor_items_temp; Type: COMMENT; Schema: public; Owner: postgres
 --
@@ -264,7 +321,7 @@ COMMENT ON TABLE sensor_items_temp IS 'Временная таблица для 
 
 
 --
--- TOC entry 2017 (class 0 OID 0)
+-- TOC entry 2023 (class 0 OID 0)
 -- Dependencies: 176
 -- Name: COLUMN sensor_items_temp.sensor_id; Type: COMMENT; Schema: public; Owner: postgres
 --
@@ -273,7 +330,7 @@ COMMENT ON COLUMN sensor_items_temp.sensor_id IS 'FK';
 
 
 --
--- TOC entry 2018 (class 0 OID 0)
+-- TOC entry 2024 (class 0 OID 0)
 -- Dependencies: 176
 -- Name: COLUMN sensor_items_temp.value_number; Type: COMMENT; Schema: public; Owner: postgres
 --
@@ -282,7 +339,7 @@ COMMENT ON COLUMN sensor_items_temp.value_number IS 'Значение';
 
 
 --
--- TOC entry 2019 (class 0 OID 0)
+-- TOC entry 2025 (class 0 OID 0)
 -- Dependencies: 176
 -- Name: COLUMN sensor_items_temp.sysd; Type: COMMENT; Schema: public; Owner: postgres
 --
@@ -307,7 +364,7 @@ CREATE TABLE smarthome_config (
 ALTER TABLE public.smarthome_config OWNER TO postgres;
 
 --
--- TOC entry 2020 (class 0 OID 0)
+-- TOC entry 2026 (class 0 OID 0)
 -- Dependencies: 175
 -- Name: TABLE smarthome_config; Type: COMMENT; Schema: public; Owner: postgres
 --
@@ -316,7 +373,7 @@ COMMENT ON TABLE smarthome_config IS 'Глобальный конфиг плат
 
 
 --
--- TOC entry 2021 (class 0 OID 0)
+-- TOC entry 2027 (class 0 OID 0)
 -- Dependencies: 175
 -- Name: COLUMN smarthome_config.attr_name; Type: COMMENT; Schema: public; Owner: postgres
 --
@@ -325,7 +382,7 @@ COMMENT ON COLUMN smarthome_config.attr_name IS 'Имя параметра';
 
 
 --
--- TOC entry 2022 (class 0 OID 0)
+-- TOC entry 2028 (class 0 OID 0)
 -- Dependencies: 175
 -- Name: COLUMN smarthome_config.attr_description; Type: COMMENT; Schema: public; Owner: postgres
 --
@@ -334,7 +391,7 @@ COMMENT ON COLUMN smarthome_config.attr_description IS 'Описание пар�
 
 
 --
--- TOC entry 2023 (class 0 OID 0)
+-- TOC entry 2029 (class 0 OID 0)
 -- Dependencies: 175
 -- Name: COLUMN smarthome_config.attr_num; Type: COMMENT; Schema: public; Owner: postgres
 --
@@ -343,7 +400,7 @@ COMMENT ON COLUMN smarthome_config.attr_num IS 'Числовое значени�
 
 
 --
--- TOC entry 2024 (class 0 OID 0)
+-- TOC entry 2030 (class 0 OID 0)
 -- Dependencies: 175
 -- Name: COLUMN smarthome_config.attr_char; Type: COMMENT; Schema: public; Owner: postgres
 --
@@ -352,7 +409,7 @@ COMMENT ON COLUMN smarthome_config.attr_char IS 'Значание символы
 
 
 --
--- TOC entry 1886 (class 2606 OID 34148)
+-- TOC entry 1888 (class 2606 OID 34148)
 -- Name: PK_smarthome_config; Type: CONSTRAINT; Schema: public; Owner: postgres; Tablespace: 
 --
 
@@ -361,7 +418,7 @@ ALTER TABLE ONLY smarthome_config
 
 
 --
--- TOC entry 1884 (class 2606 OID 17056)
+-- TOC entry 1885 (class 2606 OID 34900)
 -- Name: pk_sensor_header; Type: CONSTRAINT; Schema: public; Owner: postgres; Tablespace: 
 --
 
@@ -370,7 +427,7 @@ ALTER TABLE ONLY sensor_header
 
 
 --
--- TOC entry 1890 (class 2606 OID 34543)
+-- TOC entry 1892 (class 2606 OID 34543)
 -- Name: pk_sensor_items; Type: CONSTRAINT; Schema: public; Owner: postgres; Tablespace: 
 --
 
@@ -379,7 +436,7 @@ ALTER TABLE ONLY sensor_items
 
 
 --
--- TOC entry 1888 (class 2606 OID 34502)
+-- TOC entry 1890 (class 2606 OID 34502)
 -- Name: sensor_items_temp_pk_sensor_items; Type: CONSTRAINT; Schema: public; Owner: postgres; Tablespace: 
 --
 
@@ -388,7 +445,15 @@ ALTER TABLE ONLY sensor_items_temp
 
 
 --
--- TOC entry 1891 (class 1259 OID 34896)
+-- TOC entry 1886 (class 1259 OID 34919)
+-- Name: sensor_header_idx_ds18_uname; Type: INDEX; Schema: public; Owner: postgres; Tablespace: 
+--
+
+CREATE INDEX sensor_header_idx_ds18_uname ON sensor_header USING btree (upper((ds18_name)::text));
+
+
+--
+-- TOC entry 1893 (class 1259 OID 34896)
 -- Name: sensor_items_idx1; Type: INDEX; Schema: public; Owner: postgres; Tablespace: 
 --
 
@@ -396,7 +461,7 @@ CREATE INDEX sensor_items_idx1 ON sensor_items USING btree (sensor_id, sysd);
 
 
 --
--- TOC entry 1892 (class 2606 OID 34535)
+-- TOC entry 1894 (class 2606 OID 34901)
 -- Name: fk_sensor_items_to_h; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -405,16 +470,7 @@ ALTER TABLE ONLY sensor_items
 
 
 --
--- TOC entry 2025 (class 0 OID 0)
--- Dependencies: 1892
--- Name: CONSTRAINT fk_sensor_items_to_h ON sensor_items; Type: COMMENT; Schema: public; Owner: postgres
---
-
-COMMENT ON CONSTRAINT fk_sensor_items_to_h ON sensor_items IS 'FK';
-
-
---
--- TOC entry 2006 (class 0 OID 0)
+-- TOC entry 2009 (class 0 OID 0)
 -- Dependencies: 5
 -- Name: public; Type: ACL; Schema: -; Owner: postgres
 --
@@ -425,7 +481,31 @@ GRANT ALL ON SCHEMA public TO postgres;
 GRANT ALL ON SCHEMA public TO PUBLIC;
 
 
--- Completed on 2016-04-02 22:08:16
+--
+-- TOC entry 2011 (class 0 OID 0)
+-- Dependencies: 192
+-- Name: f_get_ds18_sensor_id(character varying); Type: ACL; Schema: public; Owner: postgres
+--
+
+REVOKE ALL ON FUNCTION f_get_ds18_sensor_id(p_ds18_serial character varying) FROM PUBLIC;
+REVOKE ALL ON FUNCTION f_get_ds18_sensor_id(p_ds18_serial character varying) FROM postgres;
+GRANT ALL ON FUNCTION f_get_ds18_sensor_id(p_ds18_serial character varying) TO postgres;
+GRANT ALL ON FUNCTION f_get_ds18_sensor_id(p_ds18_serial character varying) TO PUBLIC;
+
+
+--
+-- TOC entry 2012 (class 0 OID 0)
+-- Dependencies: 193
+-- Name: p_cleanup(); Type: ACL; Schema: public; Owner: postgres
+--
+
+REVOKE ALL ON FUNCTION p_cleanup() FROM PUBLIC;
+REVOKE ALL ON FUNCTION p_cleanup() FROM postgres;
+GRANT ALL ON FUNCTION p_cleanup() TO postgres;
+GRANT ALL ON FUNCTION p_cleanup() TO PUBLIC;
+
+
+-- Completed on 2016-04-03 11:50:51
 
 --
 -- PostgreSQL database dump complete

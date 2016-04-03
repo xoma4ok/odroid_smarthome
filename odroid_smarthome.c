@@ -310,11 +310,11 @@ int main(int argc, char **argv)
               W_postgres.prepared("insert_sensor_item")(7)(Si1132_readIR()).exec(); //si1132 IR
               W_postgres.prepared("insert_sensor_item")(8)(pressure_mmhg).exec(); //bme280 pressure_mmhg
               W_postgres.commit();
-              cout << "Records inserted successfully" << endl;
+              cout << "WeatherBoard records inserted successfully" << endl;
             }
           catch(const std::exception &e)
             {
-              cout << "Error at inserting to local postgreSQL database" << endl;
+              cout << "Error at inserting WeatherBoard to local postgreSQL database" << endl;
               cerr << e.what() << endl;
               return 1;
             }
@@ -382,6 +382,25 @@ int main(int argc, char **argv)
               l_send_payload = l_send_payload + "&SI1132IR=" +  l_buffer_for_double.str();
               l_buffer_for_double.str("");
               l_buffer_for_double.clear();
+              //Добавляем передачу 1-wire на narodmon
+              if(g_devCnt > 0)
+                {
+                  i = 0;
+                  while(1)
+                    {
+                      l_buffer_for_double << (ds18_sensor_temp[i]);
+                      l_send_payload = l_send_payload + "&DS" + to_string(ds18dev_sensor_id[i])  + "=" +  l_buffer_for_double.str();
+                      l_buffer_for_double.str("");
+                      l_buffer_for_double.clear();
+                      i++;
+                      if(i == g_devCnt)
+                        {
+                          i = 0;
+                          break;
+                        }
+                    }
+                }
+              //
               cout << "CURL payload =" << l_send_payload.c_str() << endl;
               if(curl)
                 {
@@ -398,7 +417,7 @@ int main(int argc, char **argv)
             {
               cout << "Error at HTTP POST" << endl;
               cerr << e.what() << endl;
-              return 1;
+              // return 1; Отменяем выход, пусть локально работает и дальше - вдруг интернет умер
             }
         }
       if(l_count_current % g_count_for_cleanup_db == 0)
