@@ -8,6 +8,9 @@
 #include "curl/curl.h" //CURL
 #include <cstring>
 #include <string>
+#include <dirent.h>
+#include <fcntl.h>
+#include <stdlib.h>
 
 using namespace std;
 using namespace pqxx;
@@ -26,6 +29,15 @@ int g_count_for_cleanup_db ; //На какой итерации мы чисти�
 int g_count_for_send_narodmon; //На какой итерации мы сливаем на сайт. 5=Каждый 5ый раз, по дефолту раз в 5 минут = 5
 string l_send_string_mac_prefix;
 string l_send_string_address;
+//Для ds18b20
+DIR *g_dir;
+struct dirent *g_dirent;
+char g_ds18_buf[256];     // Data from device
+char g_ds18_tmpData[5];   // Temp C * 1000 reported by device
+const char g_ds18_path[] = "/sys/bus/w1/devices";
+int g_devCnt = 0;
+ssize_t g_numRead;
+//---
 
 void prepare_sql(pqxx::connection_base &p_connection)
 {
@@ -38,7 +50,8 @@ void prepare_sql(pqxx::connection_base &p_connection)
                        "SELECT t.attr_char FROM smarthome_config t where upper(t.attr_name) = upper($1) ");
   p_connection.prepare("select_config_param_num",
                        "SELECT t.attr_num FROM smarthome_config t where upper(t.attr_name) = upper($1) ");
-  p_connection.prepare("cleanup_base", "SELECT * FROM P_CLEANUP()");
+  p_connection.prepare("cleanup_base", "SELECT p_cleanup()");
+  p_connection.prepare("get_ds18_sensor_id", "SELECT f_get_ds18_sensor_id($1)");
 }
 
 void load_config_from_db(pqxx::connection_base &p_connection)
@@ -126,6 +139,10 @@ void load_config_from_db(pqxx::connection_base &p_connection)
   W_postgres.commit();
 }
 
+
+
+
+
 int main(int argc, char **argv)
 {
   /*
@@ -165,6 +182,75 @@ int main(int argc, char **argv)
     }
   si1132_begin(l_device);
   bme280_begin(l_device);
+  //Начинаем инциализацю 1wire
+  cout << "Starting 1-wire initialize" << endl;
+  /*
+  Ищем сенсоры ds18b20, считаем количество
+  */
+  int i = 0;
+  // 1st pass counts devices
+  g_dir = opendir(g_ds18_path);
+  if(g_dir != NULL)
+    {
+      while((g_dirent = readdir(g_dir)))
+        {
+          // 1-wire devices are links beginning with 28-
+          if(g_dirent->d_type == DT_LNK &&
+              strstr(g_dirent->d_name, "28-") != NULL)
+            {
+              i++;
+            }
+        }
+      (void) closedir(g_dir);
+    }
+  else
+    {
+      cerr << "Couldn't open the w1 devices directory" << endl;
+    }
+  g_devCnt = i;
+  cout << "Found 1-wire devices: " << g_devCnt << endl;
+  i = 0;
+  char ds18dev[g_devCnt][16];
+  char ds18devPath[g_devCnt][128];
+  int ds18dev_sensor_id[g_devCnt];
+  char ds18_buf[256];     // Data from device
+  char ds18_tmpData[5];   // Temp C * 1000 reported by device
+  float ds18_sensor_temp[g_devCnt];
+  if(g_devCnt > 0)
+    {
+      g_dir = opendir(g_ds18_path);
+      /* Create a transactional object. */
+      work W_postgres(C_postgres);
+      result R_postgres;
+      cout << "Filing 1-wire masive"  << endl;
+      if(g_dir != NULL)
+        {
+          while((g_dirent = readdir(g_dir)))
+            {
+              // 1-wire devices are links beginning with 28-
+              if(g_dirent->d_type == DT_LNK &&
+                  strstr(g_dirent->d_name, "28-") != NULL)
+                {
+                  strcpy(ds18dev[i], g_dirent->d_name);
+                  // Assemble path to OneWire device
+                  sprintf(ds18devPath[i], "%s/%s/w1_slave", g_ds18_path, ds18dev[i]);
+                  R_postgres = W_postgres.prepared("get_ds18_sensor_id")(ds18dev[i]).exec();
+                  ds18dev_sensor_id[i] = R_postgres[0][0].as<int>();
+                  cout << "ds18dev name = " << ds18dev[i] << " ds18devPath = " << ds18devPath[i] << " ds18dev_sensor_id= " << ds18dev_sensor_id[i] << endl;
+                  i++;
+                }
+            }
+          (void) closedir(g_dir);
+        }
+      else
+        {
+          cerr << "Couldn't open the w1 devices directory" << endl;
+        }
+      cout << "1-wire masive filed successfully"  << endl;
+      i = 0;
+      W_postgres.commit();
+    }
+  //конец 1wire
   while(1)
     {
       l_count_current++;
@@ -182,6 +268,32 @@ int main(int argc, char **argv)
       printf("pressure mmhg : %.2lf mmHg\n", (double) pressure_mmhg);
       printf("altitude : %f m\n",
              bme280_readAltitude(pressure_hpa, SEALEVELPRESSURE_HPA));
+      ////Вычитаем значения из 1-wire
+      if(g_devCnt > 0)
+        {
+          while(1)
+            {
+              int fd = open(ds18devPath[i], O_RDONLY);
+              if(fd == -1)
+                {
+                  cerr << "Couldn't open the w1 device." << endl;;
+                }
+              while((g_numRead = read(fd, ds18_buf, 256)) > 0)
+                {
+                  strncpy(ds18_tmpData, strstr(ds18_buf, "t=") + 2, 6);
+                  ds18_sensor_temp[i] = strtof(ds18_tmpData, NULL) / 1000;
+                }
+              close(fd);
+              i++;
+              if(i == g_devCnt)
+                {
+                  i = 0;
+                  break;
+                }
+            }
+        }
+      i = 0;
+///
       //Коммит в локальную базу
       if(l_count_current % g_count_for_commit_to_base == 0)
         {
@@ -205,6 +317,33 @@ int main(int argc, char **argv)
               cout << "Error at inserting to local postgreSQL database" << endl;
               cerr << e.what() << endl;
               return 1;
+            }
+          /* Инсертим 1-wire в базу*/
+          if(g_devCnt > 0)
+            {
+              try
+                {
+                  /* Create a transactional object. */
+                  work W_postgres(C_postgres);
+                  while(1)
+                    {
+                      W_postgres.prepared("insert_sensor_item")(ds18dev_sensor_id[i])(ds18_sensor_temp[i]).exec(); //1-wire temperature insert
+                      i++;
+                      if(i == g_devCnt)
+                        {
+                          i = 0;
+                          break;
+                        }
+                    }
+                  W_postgres.commit();
+                  cout << "1-wire records inserted successfully" << endl;
+                }
+              catch(const std::exception &e)
+                {
+                  cout << "Error at inserting 1-wire to local postgreSQL database" << endl;
+                  cerr << e.what() << endl;
+                  return 1;
+                }
             }
         }
       //Отправляем значения в сервис Narodmon.ru
